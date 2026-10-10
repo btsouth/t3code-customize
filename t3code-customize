@@ -89,7 +89,8 @@ def step(message):
 
 
 def run(args, cwd=None, env=None, log=None, check=True, capture=False):
-    result = subprocess.run(args, cwd=cwd, env=env, text=capture,
+    # Output goes to the log, so nothing may wait for an answer the user cannot see.
+    result = subprocess.run(args, cwd=cwd, env=env, text=capture, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE if capture else log,
                             stderr=log if not capture else None)
     if check and result.returncode:
@@ -440,6 +441,8 @@ def build_env(node_bin):
     env = os.environ.copy()
     paths = [str(SOURCE / 'node_modules/.bin')] + ([str(node_bin)] if node_bin else [])
     env['PATH'] = os.pathsep.join(paths + [env.get('PATH', '')])
+    # Corepack otherwise asks before fetching the pnpm version the source pins.
+    env['COREPACK_ENABLE_DOWNLOAD_PROMPT'] = '0'
     # ELECTRON_RUN_AS_NODE leaks in when this runs from a terminal inside T3 Code.
     for key in ('T3CODE_DESKTOP_DEV', 'VITE_HTTP_URL', 'VITE_WS_URL', 'NODE_ENV', 'ELECTRON_RUN_AS_NODE'):
         env.pop(key, None)

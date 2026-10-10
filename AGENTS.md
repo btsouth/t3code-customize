@@ -8,7 +8,7 @@ is to carry them onto the user's nightly with every feature still working.
 
 ## Start
 
-1. Run `./t3code-customize build` from this repo. It finds the installed AppImage,
+1. Run `./t3code-customize build` from this repo. It finds the installed T3 Code (AppImage or macOS app),
    reads the exact upstream commit it was built from, and applies the patches to
    that commit in the source checkout at `~/.cache/t3code-customize/t3code`.
 2. If it reports a conflict, a rebase is stopped in that checkout. If it reports a

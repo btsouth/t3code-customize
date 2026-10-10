@@ -7,12 +7,18 @@ on:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+      - name: Check the macOS loader parses
+        run: node --check macos/inject.cjs && node --check macos/connect.mjs
       - name: Apply patches to their base and run the checks
         run: ./t3code-customize verify
       - name: Show the log on failure

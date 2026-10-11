@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Rebuild your installed T3 Code Nightly AppImage with a stats bar under the composer.
+"""Rebuild your installed T3 Code Nightly with a stats bar under the composer.
 
 Run it after every T3 Code update. Everything happens on this machine: the
-patches in this repo are applied to the exact upstream commit your AppImage was
+patches in this repo are applied to the exact upstream commit your application was
 built from, the web, server and desktop bundles are rebuilt, and the result is
-laid over a copy of your app. Your AppImage and your T3 data are never modified.
+laid over a copy of your app. Your installed app and your T3 data are never modified.
 """
 import argparse
 import copy
-import fcntl
 import hashlib
 import json
 import os
@@ -21,23 +20,31 @@ import sys
 import tarfile
 import time
 import urllib.request
+import zipfile
+
+from platform_support import (PlatformError, InstalledApp, storage_paths, find_app,
+                              host_platform, host_arch, node_target, node_bin,
+                              command_args, build_lock, finalize_copy, write_cli,
+                              write_windows_shortcut, write_mac_launcher)
 
 NAME = 't3code-customize'
 REPO = Path(__file__).resolve().parent
 UPSTREAM = 'https://github.com/pingdotgg/t3code.git'
 HOME = Path.home()
-SHARE = Path(os.environ.get('XDG_DATA_HOME') or HOME / '.local/share')
-DATA = SHARE / NAME
-CACHE = Path(os.environ.get('XDG_CACHE_HOME') or HOME / '.cache') / NAME
-CONFIG = Path(os.environ.get('XDG_CONFIG_HOME') or HOME / '.config') / NAME
+SYSTEM = host_platform()
+DATA, CACHE, CONFIG = storage_paths(HOME, SYSTEM)
+SHARE = DATA.parent
 SOURCE = CACHE / 't3code'
 STATE = DATA / 'state.json'
 CURRENT = DATA / 'current'
+LOCK = DATA.parent / (NAME + '.lock')
 DISABLED = DATA / 'disabled'
-BIN = HOME / '.local/bin' / NAME
-DESKTOP = SHARE / 'applications' / (NAME + '.desktop')
+BIN = (DATA / 'bin' / (NAME + '.cmd') if SYSTEM == 'win32' else HOME / '.local/bin' / NAME)
+DESKTOP = (Path(os.environ.get('APPDATA') or HOME / 'AppData/Roaming') /
+           'Microsoft/Windows/Start Menu/Programs/T3 Code (Customized).lnk' if SYSTEM == 'win32' else
+           HOME / 'Applications/T3 Code (Customized).app' if SYSTEM == 'darwin' else
+           SHARE / 'applications' / (NAME + '.desktop'))
 LAUNCHER_NAME = 'T3 Code (Customized)'
-SEARCH = ['Applications', 'Downloads', 'AppImages', 'Apps', '.local/bin', 'bin', 'opt']
 AGENTS = {
     'claude': ['claude', '-p', '--dangerously-skip-permissions'],
     'codex': ['codex', 'exec', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '-'],
@@ -79,7 +86,8 @@ def step(message):
 
 
 def run(args, cwd=None, env=None, log=None, check=True, capture=False):
-    result = subprocess.run(args, cwd=cwd, env=env, text=capture,
+    result = subprocess.run(command_args(args, env), cwd=cwd, env=env, text=capture,
+                            encoding='utf-8' if capture else None,
                             stdout=subprocess.PIPE if capture else log,
                             stderr=log if not capture else None)
     if check and result.returncode:
@@ -89,7 +97,8 @@ def run(args, cwd=None, env=None, log=None, check=True, capture=False):
 
 def git(*args, check=True, capture=True, log=None):
     env = {**os.environ, **GIT_ENV}
-    return run(['git', '-c', 'core.hooksPath=/dev/null', *args], cwd=SOURCE, env=env, check=check, capture=capture, log=log)
+    return run(['git', '-c', f'core.hooksPath={os.devnull}', '-c', 'core.longpaths=true',
+                '-c', 'core.autocrlf=false', *args], cwd=SOURCE, env=env, check=check, capture=capture, log=log)
 
 
 def sha256(path):
@@ -117,7 +126,8 @@ def patches():
 
 def recipe_hash():
     digest = hashlib.sha256()
-    for path in patches() + [REPO / 'patches/base.txt', REPO / 'checks.json']:
+    for path in patches() + [REPO / 'patches/base.txt', REPO / 'checks.json',
+                             REPO / NAME, REPO / 'platform_support.py']:
         digest.update(path.name.encode() + path.read_bytes())
     return digest.hexdigest()[:12]
 
@@ -140,31 +150,8 @@ def version_key(path):
     return [int(part) if part.isdigit() else part for part in re.split(r'(\d+)', path.name)]
 
 
-def find_appimage(explicit=None):
-    if explicit:
-        path = Path(explicit).expanduser().resolve()
-        if not path.is_file():
-            raise Stop(f'No AppImage at {path}.')
-        return path
-    configured = load(CONFIG / 'config.json', {}).get('appimage')
-    if configured:
-        path = Path(configured)
-        if path.is_file():
-            return path.resolve()
-        # T3's updater replaces versioned files; look again in the same folder.
-        found = sorted((p for p in path.parent.glob('T3-Code*.AppImage') if p.is_file()), key=version_key)
-        if found:
-            return found[-1].resolve()
-    found = [p for folder in SEARCH for p in (HOME / folder).glob('T3-Code*.AppImage') if p.is_file()]
-    if not found:
-        raise Stop('Could not find your T3 Code AppImage in ~/' + ', ~/'.join(SEARCH) + '.\n'
-                   f'Point to it once with: {NAME} --appimage /path/to/T3-Code-....AppImage')
-    return sorted(found, key=version_key)[-1].resolve()
-
-
-def fingerprint(path):
-    stat = path.stat()
-    return {'path': str(path), 'size': stat.st_size, 'mtime': stat.st_mtime_ns}
+def installed_app(explicit=None):
+    return find_app(HOME, load(CONFIG / 'config.json', {}), explicit, SYSTEM)
 
 
 # --- Electron asar archives ---------------------------------------------------------
@@ -217,7 +204,7 @@ def read_public_config(archive):
     return {PUBLIC_CONFIG[name]: value for name, value in found.items()}
 
 
-def overlay(stock_path, output, build, config):
+def overlay(stock_path, output, build, config, prefixes=None):
     """Write stock_path with the server and desktop bundles replaced by build's, then verify it."""
     stock = Archive(stock_path)
     try:
@@ -229,9 +216,11 @@ def overlay(stock_path, output, build, config):
                 current = current['files'][part]
             return current
 
-        node('apps/server/dist')['files']['client'] = {'files': {}}
+        prefixes = prefixes or ('apps/server/dist', 'apps/desktop/dist-electron')
+        for prefix in prefixes:
+            node(prefix)['files'] = {}
         overlays = {}
-        for prefix in ('apps/server/dist', 'apps/desktop/dist-electron'):
+        for prefix in prefixes:
             source = build / prefix
             for path in sorted(source.rglob('*')):
                 if path.is_symlink():
@@ -251,7 +240,7 @@ def overlay(stock_path, output, build, config):
                 overlays[prefix + '/' + relative] = path
         for required in ('apps/server/dist/bin.mjs', 'apps/server/dist/client/index.html',
                          'apps/desktop/dist-electron/main.cjs'):
-            if required not in overlays:
+            if any(required.startswith(prefix + '/') for prefix in prefixes) and required not in overlays:
                 raise Stop('The build did not produce ' + required)
         records, cursor = [], 0
         for key, entry in Archive.walk(tree):
@@ -274,17 +263,20 @@ def overlay(stock_path, output, build, config):
                 if patched.read(key) != path.read_bytes():
                     raise Stop('Archive verification failed for ' + key)
             for key, entry in stock.entries.items():
-                if key in overlays or key.startswith('apps/server/dist/client/'):
+                if any(key.startswith(prefix + '/') for prefix in prefixes):
                     continue
                 same = (entry == patched.entries.get(key) if entry.get('unpacked') or 'link' in entry
                         else key in patched.entries and stock.read(key) == patched.read(key))
                 if not same:
                     raise Stop('Archive verification failed for stock entry ' + key)
             for prefix, marker in MARKERS:
-                if not any(marker in data for _, data in patched.scripts(prefix)):
+                if (any(prefix.startswith(p + '/') for p in prefixes) and
+                        not any(marker in data for _, data in patched.scripts(prefix))):
                     raise Stop(f'The rebuilt bundle under {prefix} is missing the stats bar.')
             # Connect needs the same public config as stock in every bundle that carries it.
             for prefix in ('apps/server/dist/client/', 'apps/server/dist/', 'apps/desktop/dist-electron/'):
+                if not any(prefix.startswith(p + '/') for p in prefixes):
+                    continue
                 def contents(archive):
                     return b''.join(data for key, data in archive.scripts(prefix)
                                     if prefix.endswith('client/') or '/client/' not in key)
@@ -313,30 +305,38 @@ def ensure_node(log):
     system = shutil.which('node')
     if system and node_major(system) >= 24:
         return None
-    arch = {'x86_64': 'x64', 'aarch64': 'arm64'}.get(os.uname().machine)
-    if not arch:
-        raise Stop('Node 24 or newer is required. Install it and run again.')
-    private = sorted((CACHE / 'node').glob(f'node-v24.*-linux-{arch}'), key=version_key)
-    if private and node_major(str(private[-1] / 'bin/node')) >= 24:
-        return private[-1] / 'bin'
+    target, extension = node_target()
+    private = sorted((CACHE / 'node').glob(f'node-v24.*-{target}'), key=version_key)
+    executable = 'node.exe' if SYSTEM == 'win32' else 'node'
+    if private and node_major(str(node_bin(private[-1]) / executable)) >= 24:
+        return node_bin(private[-1])
     step('Downloading Node 24 (one time, private to this tool)...')
     with urllib.request.urlopen('https://nodejs.org/dist/index.json', timeout=30) as response:
         releases = json.load(response)
-    version = next(r['version'] for r in releases if r['version'].startswith('v24.') and f'linux-{arch}' in r['files'])
-    name = f'node-{version}-linux-{arch}'
+    release_target = target + ('-zip' if SYSTEM == 'win32' else '')
+    version = next(r['version'] for r in releases if r['version'].startswith('v24.') and release_target in r['files'])
+    name = f'node-{version}-{target}'
     base = f'https://nodejs.org/dist/{version}/'
     with urllib.request.urlopen(base + 'SHASUMS256.txt', timeout=30) as response:
         sums = dict(reversed(line.split()) for line in response.read().decode().splitlines() if line.strip())
     folder = CACHE / 'node'
     folder.mkdir(parents=True, exist_ok=True)
-    archive = folder / (name + '.tar.xz')
+    archive = folder / (name + extension)
     urllib.request.urlretrieve(base + archive.name, archive)
     if sha256(archive) != sums.get(archive.name):
         archive.unlink()
         raise Stop('The Node download did not match its published checksum.')
-    extract_tar(archive, folder)
+    if extension == '.zip':
+        with zipfile.ZipFile(archive) as bundle:
+            for entry in bundle.namelist():
+                destination = (folder / entry).resolve()
+                if not destination.is_relative_to(folder.resolve()):
+                    raise Stop('Unsafe path in the Node archive.')
+            bundle.extractall(folder)
+    else:
+        extract_tar(archive, folder)
     archive.unlink()
-    return folder / name / 'bin'
+    return node_bin(folder / name)
 
 
 def build_env(node_bin):
@@ -375,7 +375,8 @@ def ensure_commit(commit, version, log):
         step('Downloading T3 Code source history (one time)...')
         shutil.rmtree(SOURCE, ignore_errors=True)
         SOURCE.parent.mkdir(parents=True, exist_ok=True)
-        run(['git', 'clone', '--filter=blob:none', '--no-checkout', UPSTREAM, str(SOURCE)], log=log)
+        run(['git', '-c', 'core.longpaths=true', '-c', 'core.autocrlf=false',
+             'clone', '--filter=blob:none', '--no-checkout', UPSTREAM, str(SOURCE)], log=log)
     if not has_commit(commit):
         git('fetch', '--quiet', 'origin', capture=False, log=log, check=False)
         if version and not has_commit(commit):
@@ -448,9 +449,9 @@ def build_bundles(env, version, stock_root, config, log):
         brand = 'nightly' if 'nightly' in version else 'production'
         run(['node', 'scripts/apply-web-brand-assets.ts', brand, 'apps/server/dist/client'], cwd=SOURCE, env=env, log=log)
         # Reuse the native helper from your own app instead of compiling it.
-        arch = {'x86_64': 'x64', 'aarch64': 'arm64'}.get(os.uname().machine, 'x64')
+        arch = host_arch()
         helper = SOURCE / f'native/browser-secret/build/{arch}/t3-browser-secret'
-        stock_helper = stock_root / 'resources/browser-secret/t3-browser-secret'
+        stock_helper = stock_root.resources / 'browser-secret/t3-browser-secret'
         if stock_helper.exists():
             helper.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(stock_helper, helper)
@@ -494,7 +495,8 @@ def agent_fix(agent, problem, target, version, log):
     step(f'{AGENT_NAMES[agent]} is porting the patches. Transcript: {log.name}')
     log.write('\n--- agent prompt ---\n' + prompt + '\n')
     log.flush()
-    result = subprocess.run(AGENTS[agent], cwd=SOURCE, input=prompt, text=True, stdout=log, stderr=log)
+    result = subprocess.run(command_args(AGENTS[agent]), cwd=SOURCE, input=prompt,
+                            text=True, encoding='utf-8', stdout=log, stderr=log)
     if result.returncode:
         say(f'{AGENT_NAMES[agent]} exited with {result.returncode}; checking what it left.')
 
@@ -544,11 +546,19 @@ def pull_latest():
         os.execv(sys.executable, [sys.executable, str(REPO / NAME), *sys.argv[1:], '--no-pull'])
 
 
-def install_launcher(appimage_dir):
-    BIN.parent.mkdir(parents=True, exist_ok=True)
-    if BIN.is_symlink() or not BIN.exists():
-        BIN.unlink(missing_ok=True)
-        BIN.symlink_to(REPO / NAME)
+def install_launcher():
+    write_cli(BIN, REPO, sys.executable)
+    if SYSTEM == 'win32':
+        write_windows_shortcut(DESKTOP, REPO, sys.executable, run)
+    elif SYSTEM == 'darwin':
+        write_mac_launcher(DESKTOP, REPO, sys.executable, run)
+    else:
+        install_linux_launcher()
+    if str(BIN.parent) not in os.environ.get('PATH', '').split(os.pathsep):
+        say(f'Note: {BIN.parent} is not on your PATH. Add it to run {NAME} from anywhere.')
+
+
+def install_linux_launcher():
     DESKTOP.parent.mkdir(parents=True, exist_ok=True)
     DESKTOP.write_text('\n'.join([
         '[Desktop Entry]', 'Type=Application', f'Name={LAUNCHER_NAME}',
@@ -558,8 +568,27 @@ def install_launcher(appimage_dir):
     if shutil.which('update-desktop-database'):
         subprocess.run(['update-desktop-database', str(DESKTOP.parent)], check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if str(BIN.parent) not in os.environ.get('PATH', '').split(os.pathsep):
-        say(f'Note: {BIN.parent} is not on your PATH. Add it to run {NAME} from anywhere.')
+
+
+def overlay_app(app, job, config):
+    desktop = app.resources / 'app.asar'
+    server = app.resources / 'server.asar'
+    archives = ([(desktop, ('apps/desktop/dist-electron',)), (server, ('apps/server/dist',))]
+                if server.is_file() else [(desktop, ('apps/server/dist', 'apps/desktop/dist-electron'))])
+    for path, prefixes in archives:
+        output = job / (path.name + '.new')
+        overlay(path, output, SOURCE, config, prefixes)
+        os.replace(output, path)
+
+
+def current_executable(state):
+    if state.get('build'):
+        root = Path(state['build'])
+        if SYSTEM == 'linux':
+            return root / 'AppRun'
+        if root.exists():
+            return InstalledApp.inspect(root, SYSTEM).executable
+    return CURRENT / 'AppRun' if SYSTEM == 'linux' else DATA / 'missing-build'
 
 
 def cmd_build(args):
@@ -568,15 +597,16 @@ def cmd_build(args):
         raise Stop('git is required. Install it and run again.')
     if not args.no_pull and not args.resume:
         pull_latest()
-    appimage = find_appimage(args.appimage)
-    if args.appimage:
-        save(CONFIG / 'config.json', {**load(CONFIG / 'config.json', {}), 'appimage': str(appimage)})
-    say('T3 Code: ' + str(appimage))
+    app = installed_app(args.app)
+    if args.app:
+        save(CONFIG / 'config.json', {**load(CONFIG / 'config.json', {}), 'app': str(app.path)})
+    say('T3 Code: ' + str(app.path))
+    stock_fingerprint = app.fingerprint()
     state = load(STATE, {})
     recipe = recipe_hash()
-    if (not args.force and not args.resume and state.get('stock') == fingerprint(appimage)
-            and state.get('recipe') == recipe and (CURRENT / 'AppRun').exists()):
-        install_launcher(appimage.parent)
+    if (not args.force and not args.resume and state.get('stock') == stock_fingerprint
+            and state.get('recipe') == recipe and current_executable(state).exists()):
+        install_launcher()
         say(f'\nAlready up to date. Open "{LAUNCHER_NAME}" from your app launcher.')
         return
     DATA.mkdir(parents=True, exist_ok=True)
@@ -584,14 +614,18 @@ def cmd_build(args):
     logs.mkdir(parents=True, exist_ok=True)
     job = CACHE / 'work' / time.strftime('%Y%m%d-%H%M%S')
     job.mkdir(parents=True)
-    with (logs / (job.name + '.log')).open('w') as log:
+    with (logs / (job.name + '.log')).open('w', encoding='utf-8') as log:
         say('Log: ' + log.name)
         step('Reading your T3 Code...')
-        run([str(appimage), '--appimage-extract'], cwd=job, log=log)
-        stock_root = job / 'squashfs-root'
-        archive = Archive(stock_root / 'resources/app.asar')
+        stock_root = app.copy_to(job, run, log)
+        archive = Archive(stock_root.resources / 'app.asar')
         try:
             metadata = json.loads(archive.read('package.json'))
+        finally:
+            archive.close()
+        server = stock_root.resources / 'server.asar'
+        archive = Archive(server if server.is_file() else stock_root.resources / 'app.asar')
+        try:
             config = read_public_config(archive)
         finally:
             archive.close()
@@ -599,7 +633,7 @@ def cmd_build(args):
         if 'nightly' not in version:
             raise Stop(f'This is T3 Code {version}. The patches target T3 Code Nightly; install Nightly and run again.')
         if not re.fullmatch(r'[0-9a-f]{7,40}', commit):
-            raise Stop('This AppImage does not record its source commit, so it cannot be rebuilt exactly.')
+            raise Stop('This application does not record its source commit, so it cannot be rebuilt exactly.')
         say(f'    Nightly {version}, upstream commit {commit[:12]}')
         if len(config) != len(PUBLIC_CONFIG):
             say('    Note: could not read T3 Connect config from your app; sign-in may not work in this build.')
@@ -632,20 +666,17 @@ def cmd_build(args):
         if git('rev-parse', 'HEAD').strip() != head:
             raise Stop('The source checkout changed during the build.')
         step('Assembling and verifying your customized app...')
-        output = job / 'app.asar'
-        overlay(stock_root / 'resources/app.asar', output, SOURCE, config)
-        shutil.move(str(output), stock_root / 'resources/app.asar')
+        overlay_app(stock_root, job, config)
+        finalize_copy(stock_root, run, log)
+        if app.fingerprint() != stock_fingerprint:
+            raise Stop('The installed T3 Code changed during the build. Run again for its new version.')
         if ported:
             export_patches(target)
-        destination = DATA / 'builds' / f'{version}-{recipe_hash()}-{job.name}'
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(stock_root), destination)
-        link = DATA / 'current.new'
-        if link.is_symlink():
-            link.unlink()
-        link.symlink_to(destination.relative_to(DATA))
-        os.replace(link, CURRENT)
-        save(STATE, {'stock': fingerprint(appimage), 'version': version, 'commit': target, 'recipe': recipe_hash(),
+        build_dir = DATA / 'builds' / f'{version}-{recipe_hash()}-{job.name}'
+        build_dir.mkdir(parents=True)
+        destination = build_dir / stock_root.path.name
+        shutil.move(str(stock_root.path), destination)
+        save(STATE, {'stock': stock_fingerprint, 'version': version, 'commit': target, 'recipe': recipe_hash(),
                      'build': str(destination), 'connect': len(config) == len(PUBLIC_CONFIG),
                      'builtAt': time.strftime('%Y-%m-%dT%H:%M:%S')})
         icon = destination / 't3code.png'
@@ -653,7 +684,7 @@ def cmd_build(args):
             shutil.copy2(icon, DATA / 'icon.png')
         prune()
     shutil.rmtree(job, ignore_errors=True)
-    install_launcher(appimage.parent)
+    install_launcher()
     minutes = max(1, round((time.time() - started) / 60))
     say(f'\nDone in {minutes} min: T3 Code {version} with the stats bar.')
     if ported:
@@ -676,7 +707,8 @@ def export_patches(target):
 
 def prune(keep=3):
     """Drop old builds, keeping the newest few so a running instance never loses its files."""
-    current = CURRENT.resolve()
+    state = load(STATE, {})
+    current = Path(state['build']).parent if state.get('build') else CURRENT.resolve()
     builds = sorted((DATA / 'builds').iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in builds[keep:]:
         if old.resolve() != current:
@@ -684,11 +716,11 @@ def prune(keep=3):
 
 
 def cmd_verify(args):
-    """Apply the patches to their base and run the checks. No AppImage needed (used by CI)."""
+    """Apply the patches to their base and run the checks. No installed app needed."""
     logs = CACHE / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
     base = (REPO / 'patches/base.txt').read_text().strip()
-    with (logs / ('verify-' + time.strftime('%Y%m%d-%H%M%S') + '.log')).open('w') as log:
+    with (logs / ('verify-' + time.strftime('%Y%m%d-%H%M%S') + '.log')).open('w', encoding='utf-8') as log:
         say('Log: ' + log.name)
         env = build_env(ensure_node(log))
         target = ensure_commit(base, None, log)
@@ -699,39 +731,48 @@ def cmd_verify(args):
 
 
 def launch_target():
-    """The customized build if it was made from the AppImage installed right now, else stock."""
-    appimage = find_appimage()
+    """Use the customized build only while it matches the installed application."""
+    app = installed_app()
     state = load(STATE, {})
-    built = CURRENT / 'AppRun'
+    built = current_executable(state)
     if DISABLED.exists() or not built.exists():
-        return appimage, None
-    if state.get('stock') != fingerprint(appimage):
-        return appimage, f'T3 Code was updated. Run {NAME} in a terminal to bring the stats bar back.'
+        return app.executable, None
+    if state.get('stock') != app.fingerprint():
+        return app.executable, f'T3 Code was updated. Run {NAME} in a terminal to bring the stats bar back.'
     return built.resolve(), None
 
 
 def cmd_launch(args):
-    appimage = find_appimage()
+    app = installed_app()
     target, notice = launch_target()
     if notice:
         say(notice)
         if shutil.which('notify-send'):
             subprocess.run(['notify-send', '-a', 'T3 Code', 'Opening stock T3 Code', notice], check=False)
-    if target != appimage:
+    env = os.environ.copy()
+    for key in ('ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ASAR', 'NODE_OPTIONS'):
+        env.pop(key, None)
+    if target != app.executable and SYSTEM == 'linux':
         # Run the extracted copy as if it were the AppImage, so T3's own updater still updates the real file.
-        os.environ['APPIMAGE'] = str(appimage)
-        os.environ['APPDIR'] = str(target.parent)
-    os.execv(str(target), [str(target), *args.rest])
+        env['APPIMAGE'] = str(app.path)
+        env['APPDIR'] = str(target.parent)
+    elif target != app.executable:
+        env['T3CODE_DISABLE_AUTO_UPDATE'] = 'true'
+    rest = args.rest[1:] if args.rest[:1] == ['--'] else args.rest
+    if SYSTEM == 'win32':
+        subprocess.Popen([str(target), *rest], env=env, creationflags=subprocess.DETACHED_PROCESS)
+    else:
+        os.execve(str(target), [str(target), *rest], env)
 
 
 def cmd_status(args):
-    appimage = find_appimage()
+    app = installed_app()
     state = load(STATE, {})
     target, notice = launch_target()
-    say('Installed T3 Code:  ' + str(appimage))
+    say('Installed T3 Code:  ' + str(app.path))
     say('Customized build:   ' + (f"{state['version']} (built {state['builtAt']})" if state else 'none yet'))
     say('Switched:           ' + ('off' if DISABLED.exists() else 'on'))
-    say('Next launch opens:  ' + ('customized build' if target != appimage else 'stock T3 Code'))
+    say('Next launch opens:  ' + ('customized build' if target != app.executable else 'stock T3 Code'))
     if notice:
         say(notice)
 
@@ -748,11 +789,14 @@ def cmd_off(args):
 
 
 def cmd_uninstall(args):
-    if BIN.is_symlink() and BIN.resolve() == (REPO / NAME).resolve():
-        BIN.unlink()
-    DESKTOP.unlink(missing_ok=True)
+    BIN.unlink(missing_ok=True)
+    if SYSTEM == 'darwin' and DESKTOP.exists():
+        shutil.rmtree(DESKTOP)
+    else:
+        DESKTOP.unlink(missing_ok=True)
     for folder in (DATA, CACHE, CONFIG):
-        shutil.rmtree(folder, ignore_errors=True)
+        if folder.exists():
+            shutil.rmtree(folder)
     tail = '' if DATA in REPO.parents else f' You can delete {REPO} too.'
     say('Removed t3code-customize, its launcher, builds and caches. Your T3 Code and its data are untouched.' + tail)
 
@@ -763,7 +807,8 @@ def main():
     sub = parser.add_subparsers(dest='command')
 
     def build_options(p):
-        p.add_argument('--appimage', help='path to your T3 Code AppImage (remembered)')
+        p.add_argument('--app', '--appimage', dest='app',
+                       help='installed AppImage, macOS .app bundle, or Windows executable (remembered)')
         p.add_argument('--fix', choices=sorted(AGENTS), help='if a nightly breaks the patches, let this agent port them without asking')
         p.add_argument('--resume', action='store_true', help='continue from the source checkout as you or your agent left it')
         p.add_argument('--skip-checks', action='store_true', help='skip the patch tests and typechecks')
@@ -782,22 +827,23 @@ def main():
     if not argv or argv[0].startswith('-') and argv[0] not in ('-h', '--help'):
         argv = ['build', *argv]
     args = parser.parse_args(argv)
+    if not args.command:
+        parser.print_help()
+        return
     handler = globals()['cmd_' + args.command]
     if args.command in ('launch', 'status', 'on', 'off'):
         return handler(args)
     CACHE.mkdir(parents=True, exist_ok=True)
-    with (CACHE / 'lock').open('w') as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise Stop(f'Another {NAME} is already running.')
+    # Keep the coordination file outside the removable installation. On Windows
+    # a locked file cannot be deleted, and deleting it on POSIX breaks exclusion.
+    with build_lock(LOCK):
         handler(args)
 
 
 if __name__ == '__main__':
     try:
         main()
-    except Stop as stop:
+    except (Stop, PlatformError, OSError) as stop:
         print(f'\n{stop}', file=sys.stderr)
         sys.exit(3 if isinstance(stop, NeedsFix) else 1)
     except KeyboardInterrupt:

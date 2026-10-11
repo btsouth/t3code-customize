@@ -6,6 +6,21 @@ on:
   pull_request:
 
 jobs:
+  platform-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Test installed layouts, overlays, locks and integrity metadata
+        run: python -m unittest discover -s tests -v
+      - name: Check CLI imports on the host
+        run: python t3code-customize --help
   verify:
     runs-on: ubuntu-latest
     steps:
@@ -13,6 +28,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
       - name: Apply patches to their base and run the checks
         run: ./t3code-customize verify
       - name: Show the log on failure

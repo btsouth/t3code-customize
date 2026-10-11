@@ -10,6 +10,7 @@ Unofficial. Not affiliated with T3 Tools. For T3 Code Nightly on Linux (AppImage
 - **Context** used in the thread. Hover it for the window size, the auto-compaction threshold and a Compact now button.
 - **Tokens per second** for the last response, with turn time and token details on hover. Claude rates are measured from the stream; Codex rates are labeled approximate.
 - **Cache rate** for the last turn.
+- **Subscription switch** when you have more than one signed-in subscription that offers your model. If the current one is on pace to run out before its 5 hour or weekly window resets, a chip like **Opus 5.5 on Personal →** switches the thread to the same model on the one with the most room. It also points out a subscription whose weekly allowance resets within a day mostly unused. Hover it for the reasoning.
 
 Everything else is stock T3 Code, including T3 Connect and the mobile app.
 
@@ -45,7 +46,7 @@ Your current T3 Code keeps working the whole time.
 
 ## How it works
 
-T3 Code is open source (MIT). This repo holds three patches and one script. The script:
+T3 Code is open source (MIT). This repo holds four patches and one script. The script:
 
 1. reads your installed AppImage: its exact upstream commit and the public config T3 Connect needs,
 2. applies the patches to that commit and runs their tests,

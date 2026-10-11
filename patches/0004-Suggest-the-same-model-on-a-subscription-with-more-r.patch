@@ -1,0 +1,653 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: t3code-customize <t3code-customize@localhost>
+Date: Sun, 11 Oct 2026 02:06:07 +0200
+Subject: [PATCH 4/4] Suggest the same model on a subscription with more room
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The stats line shows a chip such as 'Opus 5.5 on Claude Personal →' when
+the current subscription is on pace to run out before its 5h or weekly
+window resets (or is 90% used), naming the signed-in subscription with
+the most headroom that offers the same model. It also suggests another
+subscription whose weekly allowance resets within a day mostly unused.
+Model-scoped weeklies only count for their own model family. Clicking
+switches the thread through the usual model selection; the tooltip
+explains why and when a started thread cannot switch.
+---
+ apps/web/src/components/ChatView.tsx          |  18 ++
+ .../web/src/components/chat/ComposerStats.tsx |  69 ++++++
+ .../chat/SubscriptionSwitch.logic.test.ts     | 226 ++++++++++++++++++
+ .../chat/SubscriptionSwitch.logic.ts          | 225 +++++++++++++++++
+ 4 files changed, 538 insertions(+)
+ create mode 100644 apps/web/src/components/chat/SubscriptionSwitch.logic.test.ts
+ create mode 100644 apps/web/src/components/chat/SubscriptionSwitch.logic.ts
+
+diff --git a/apps/web/src/components/ChatView.tsx b/apps/web/src/components/ChatView.tsx
+index ae2e04af5..ee35fc688 100644
+--- a/apps/web/src/components/ChatView.tsx
++++ b/apps/web/src/components/ChatView.tsx
+@@ -376,6 +376,7 @@ import {
+   type ComposerImageAttachment,
+   type DraftThreadEnvMode,
+   useComposerDraftStore,
++  useEffectiveComposerModelState,
+   DraftId,
+ } from "../composerDraftStore";
+ import {
+@@ -3635,6 +3636,16 @@ export default function ChatView(props: ChatViewProps) {
+     [activeThreadLiveTokenUsage, serverVisibleTurnItems, serverProjection],
+   );
+   const activeUsageLimits = activeProviderStatus?.usageLimits;
++  // The model the composer shows, so the switch keeps it while changing subscription.
++  const { selectedModel: subscriptionSwitchModel } = useEffectiveComposerModelState({
++    threadRef: composerDraftTarget,
++    providers: providerStatuses,
++    selectedProvider,
++    selectedInstanceId: activeProviderInstanceId,
++    threadModelSelection: activeThread?.modelSelection,
++    projectModelSelection: activeProjectDefaultModelSelection,
++    settings,
++  });
+   const activeProviderName =
+     activeProviderStatus?.displayName?.trim() || activeProviderStatus?.instanceId || "";
+   const composerStats = useMemo(() => {
+@@ -11940,6 +11951,13 @@ export default function ChatView(props: ChatViewProps) {
+                                   : compactDisabledReason
+                           }
+                           isCompacting={isCompacting}
++                          subscriptionSwitch={{
++                            providers: providerStatuses,
++                            instanceId: activeProviderInstanceId,
++                            model: subscriptionSwitchModel,
++                            getDisabledReason: getModelDisabledReason,
++                            onSwitch: onProviderModelSelect,
++                          }}
+                         />
+                       )}
+                       <div
+diff --git a/apps/web/src/components/chat/ComposerStats.tsx b/apps/web/src/components/chat/ComposerStats.tsx
+index 53b81a83a..4a4b72fcd 100644
+--- a/apps/web/src/components/chat/ComposerStats.tsx
++++ b/apps/web/src/components/chat/ComposerStats.tsx
+@@ -1,6 +1,8 @@
+ import type {
+   OrchestrationV2ProviderTurn,
+   OrchestrationV2TurnItem,
++  ProviderInstanceId,
++  ServerProvider,
+   ServerProviderUsageLimits,
+   ServerProviderUsageWindow,
+ } from "@t3tools/contracts";
+@@ -26,6 +28,7 @@ import {
+   deriveTurnElapsedMs,
+   selectComposerLimitWindows,
+ } from "./ComposerStats.logic";
++import { recommendSubscriptionSwitch } from "./SubscriptionSwitch.logic";
+ 
+ function ElapsedTime({ turn }: { turn: OrchestrationV2ProviderTurn }) {
+   const textRef = useRef<HTMLSpanElement>(null);
+@@ -275,6 +278,68 @@ function UsageLimitsSummary({
+   );
+ }
+ 
++export interface SubscriptionSwitchInput {
++  readonly providers: ReadonlyArray<ServerProvider>;
++  readonly instanceId: ProviderInstanceId | null;
++  readonly model: string | null;
++  /** Why the thread cannot move to this selection right now, if it cannot. */
++  readonly getDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
++  readonly onSwitch: (instanceId: ProviderInstanceId, model: string) => void;
++}
++
++/** "Opus 5.5 on Claude Personal": the same model on a subscription with more room. */
++function SubscriptionSwitchChip({
++  providers,
++  instanceId,
++  model,
++  getDisabledReason,
++  onSwitch,
++}: SubscriptionSwitchInput) {
++  const [now, setNow] = useState(Date.now);
++  useEffect(() => {
++    const timer = window.setInterval(() => setNow(Date.now()), COMPOSER_STATS_CLOCK_MS);
++    return () => window.clearInterval(timer);
++  }, []);
++  const suggestion = recommendSubscriptionSwitch({ instanceId, model, providers, nowMs: now });
++  if (!suggestion) return null;
++  const disabledReason = getDisabledReason(suggestion.instanceId, suggestion.model);
++  const tone =
++    suggestion.kind === "pressure"
++      ? "border-warning/40 text-warning hover:bg-warning/10"
++      : "border-foreground/15 text-foreground/80 hover:bg-foreground/5";
++  return (
++    <Tooltip>
++      <TooltipTrigger
++        render={
++          <button
++            type="button"
++            data-subscription-switch={suggestion.kind}
++            aria-disabled={disabledReason !== null}
++            onClick={() => {
++              if (disabledReason === null) onSwitch(suggestion.instanceId, suggestion.model);
++            }}
++            className={`inline-flex items-center gap-1 rounded-sm border px-1.5 -outline-offset-2 ${tone} ${
++              disabledReason !== null ? "cursor-not-allowed opacity-60" : "cursor-pointer"
++            }`}
++          />
++        }
++      >
++        <span>
++          {suggestion.modelName} on {suggestion.providerName}
++        </span>
++        <span aria-hidden="true">→</span>
++      </TooltipTrigger>
++      <TooltipPopup className="max-w-80">
++        <p>{suggestion.reason}</p>
++        <p className="mt-1 text-muted-foreground">
++          {disabledReason ??
++            `Switch this thread to ${suggestion.modelName} on ${suggestion.providerName}.`}
++        </p>
++      </TooltipPopup>
++    </Tooltip>
++  );
++}
++
+ export function ComposerStats({
+   context,
+   turn,
+@@ -286,6 +351,7 @@ export function ComposerStats({
+   compactDisabled,
+   compactDisabledReason,
+   isCompacting,
++  subscriptionSwitch = null,
+ }: {
+   context: ContextWindowSnapshot | null;
+   turn: OrchestrationV2ProviderTurn | null;
+@@ -297,6 +363,7 @@ export function ComposerStats({
+   compactDisabled: boolean;
+   compactDisabledReason: string | null;
+   isCompacting: boolean;
++  subscriptionSwitch?: SubscriptionSwitchInput | null;
+ }) {
+   const compaction = deriveContextCompaction(context, contextDriver, configuredClaudeThreshold);
+   const responseRate = deriveResponseRate(turn);
+@@ -317,6 +384,7 @@ export function ComposerStats({
+     responseRate === null &&
+     compactions.length === 0 &&
+     selectComposerLimitWindows(usageLimits?.limits).length === 0 &&
++    subscriptionSwitch === null &&
+     compactDisabled
+   )
+     return null;
+@@ -577,6 +645,7 @@ export function ComposerStats({
+       {usageLimits && (
+         <UsageLimitsSummary limits={usageLimits.limits} providerName={usageLimits.providerName} />
+       )}
++      {subscriptionSwitch && <SubscriptionSwitchChip {...subscriptionSwitch} />}
+       {stats.length > 0 && (
+         <span className="ms-auto inline-flex flex-wrap items-center gap-x-2.5">
+           {stats.map(({ key, node }, index) => (
+diff --git a/apps/web/src/components/chat/SubscriptionSwitch.logic.test.ts b/apps/web/src/components/chat/SubscriptionSwitch.logic.test.ts
+new file mode 100644
+index 000000000..da5f1aa6e
+--- /dev/null
++++ b/apps/web/src/components/chat/SubscriptionSwitch.logic.test.ts
+@@ -0,0 +1,226 @@
++import {
++  ProviderInstanceId,
++  type ServerProvider,
++  type ServerProviderUsageWindow,
++} from "@t3tools/contracts";
++import { describe, expect, it } from "vite-plus/test";
++
++import {
++  recommendSubscriptionSwitch,
++  windowPace,
++  windowsForModel,
++} from "./SubscriptionSwitch.logic";
++
++const nowMs = Date.parse("2026-10-11T12:00:00Z");
++const iso = (offsetMs: number) => new Date(nowMs + offsetMs).toISOString();
++const HOUR = 60 * 60_000;
++
++function session(usedPercent: number, resetInHours: number): ServerProviderUsageWindow {
++  return {
++    id: "five_hour",
++    kind: "session",
++    label: "Session",
++    usedPercent,
++    resetsAt: iso(resetInHours * HOUR),
++    windowDurationMins: 300,
++    checkedAt: iso(-60_000),
++  };
++}
++
++function weekly(
++  usedPercent: number,
++  resetInHours: number,
++  id = "seven_day",
++  label = "Weekly",
++): ServerProviderUsageWindow {
++  return {
++    id,
++    kind: "weekly",
++    label,
++    usedPercent,
++    resetsAt: iso(resetInHours * HOUR),
++    windowDurationMins: 7 * 24 * 60,
++    checkedAt: iso(-60_000),
++  };
++}
++
++function provider(
++  instanceId: string,
++  windows: ReadonlyArray<ServerProviderUsageWindow>,
++  overrides: Partial<ServerProvider> = {},
++): ServerProvider {
++  return {
++    instanceId: ProviderInstanceId.make(instanceId),
++    driver: "claudeAgent",
++    displayName: instanceId,
++    enabled: true,
++    installed: true,
++    version: "1.0.0",
++    status: "ready",
++    auth: { status: "authenticated" },
++    checkedAt: iso(0),
++    models: [
++      {
++        slug: "claude-opus-5-5",
++        name: "Claude Opus 5.5",
++        shortName: "Opus 5.5",
++        isCustom: false,
++        capabilities: null,
++      },
++      {
++        slug: "claude-fable-5-1",
++        name: "Claude Fable 5.1",
++        shortName: "Fable 5.1",
++        isCustom: false,
++        capabilities: null,
++      },
++    ],
++    slashCommands: [],
++    skills: [],
++    usageLimits: { checkedAt: iso(-60_000), windows: [...windows] },
++    ...overrides,
++  } as ServerProvider;
++}
++
++const recommend = (current: string, model: string, providers: ReadonlyArray<ServerProvider>) =>
++  recommendSubscriptionSwitch({
++    instanceId: ProviderInstanceId.make(current),
++    model,
++    providers,
++    nowMs,
++  });
++
++describe("windowPace", () => {
++  it("projects usage to the reset at the pace so far", () => {
++    // 60% used with 2 of 5 hours left: 3 hours elapsed, on pace for 100%.
++    expect(windowPace(session(60, 2), nowMs).projectedPercent).toBeCloseTo(100);
++  });
++
++  it("does not project from the first slice of a window", () => {
++    expect(windowPace(session(8, 4.9), nowMs).projectedPercent).toBeNull();
++  });
++
++  it("treats a passed reset as empty", () => {
++    expect(windowPace(session(95, -0.1), nowMs)).toMatchObject({
++      usedPercent: 0,
++      projectedPercent: null,
++    });
++  });
++});
++
++describe("windowsForModel", () => {
++  it("keeps account-wide windows and only the model's own scoped weekly", () => {
++    const limits = {
++      checkedAt: iso(0),
++      windows: [
++        session(10, 2),
++        weekly(10, 50),
++        weekly(90, 50, "seven_day_fable", "Weekly · Fable"),
++      ],
++    };
++    expect(windowsForModel(limits, "claude-opus-5-5").map((w) => w.id)).toEqual([
++      "five_hour",
++      "seven_day",
++    ]);
++    expect(windowsForModel(limits, "claude-fable-5-1").map((w) => w.id)).toEqual([
++      "five_hour",
++      "seven_day",
++      "seven_day_fable",
++    ]);
++  });
++});
++
++describe("recommendSubscriptionSwitch", () => {
++  it("suggests the same model on a subscription with headroom when the current one is running out", () => {
++    const suggestion = recommend("claude-work", "claude-opus-5-5", [
++      provider("claude-work", [session(70, 2), weekly(40, 100)]),
++      provider("claude-personal", [session(10, 3), weekly(20, 100)]),
++    ]);
++    expect(suggestion).toMatchObject({
++      kind: "pressure",
++      instanceId: "claude-personal",
++      model: "claude-opus-5-5",
++      modelName: "Opus 5.5",
++    });
++    expect(suggestion?.reason).toContain("Session is on pace for 117%");
++  });
++
++  it("picks the subscription with the most headroom", () => {
++    const suggestion = recommend("a", "claude-opus-5-5", [
++      provider("a", [session(95, 1)]),
++      provider("b", [session(60, 1)]),
++      provider("c", [session(20, 1)]),
++    ]);
++    expect(suggestion?.instanceId).toBe("c");
++  });
++
++  it("only counts the model's own scoped weekly", () => {
++    const providers = [
++      provider("a", [
++        session(10, 2),
++        weekly(30, 100),
++        weekly(95, 100, "seven_day_fable", "Weekly · Fable"),
++      ]),
++      provider("b", [session(10, 2), weekly(30, 100)]),
++    ];
++    expect(recommend("a", "claude-opus-5-5", providers)).toBeNull();
++    expect(recommend("a", "claude-fable-5-1", providers)?.instanceId).toBe("b");
++  });
++
++  it("never suggests a subscription that lacks the model, is signed out, or is also running out", () => {
++    const hot = [session(95, 1)];
++    expect(
++      recommend("a", "claude-opus-5-5", [
++        provider("a", hot),
++        provider("no-model", [session(5, 1)], { models: [] }),
++        provider("signed-out", [session(5, 1)], { auth: { status: "unauthenticated" } }),
++        provider("disabled", [session(5, 1)], { enabled: false }),
++        provider("also-hot", [session(92, 1)]),
++        provider("unknown", [], { usageLimits: undefined }),
++      ]),
++    ).toBeNull();
++  });
++
++  it("does nothing when the current limits are unknown or stale", () => {
++    const stale = { ...session(99, 1), checkedAt: iso(-60 * 60_000) };
++    expect(
++      recommend("a", "claude-opus-5-5", [
++        provider("a", [stale], { usageLimits: { checkedAt: iso(-60 * 60_000), windows: [stale] } }),
++        provider("b", [session(5, 1)]),
++      ]),
++    ).toBeNull();
++  });
++
++  it("suggests using another subscription whose weekly allowance is about to reset unused", () => {
++    const suggestion = recommend("a", "claude-opus-5-5", [
++      provider("a", [session(20, 3), weekly(15, 120)]),
++      provider("b", [session(5, 3), weekly(35, 10)]),
++    ]);
++    expect(suggestion).toMatchObject({ kind: "expiring", instanceId: "b" });
++    expect(suggestion?.reason).toContain("65% of b's weekly allowance is unused");
++  });
++
++  it("does not call an allowance expiring when the current one resets first or it is mostly used", () => {
++    expect(
++      recommend("a", "claude-opus-5-5", [
++        provider("a", [session(20, 3), weekly(30, 5)]),
++        provider("b", [session(5, 3), weekly(35, 10)]),
++      ]),
++    ).toBeNull();
++    expect(
++      recommend("a", "claude-opus-5-5", [
++        provider("a", [session(20, 3), weekly(15, 120)]),
++        provider("b", [session(5, 3), weekly(80, 10)]),
++      ]),
++    ).toBeNull();
++  });
++
++  it("stays quiet when the current subscription is fine and nothing is expiring", () => {
++    expect(
++      recommend("a", "claude-opus-5-5", [
++        provider("a", [session(20, 3), weekly(15, 120)]),
++        provider("b", [session(5, 3), weekly(10, 100)]),
++      ]),
++    ).toBeNull();
++  });
++});
+diff --git a/apps/web/src/components/chat/SubscriptionSwitch.logic.ts b/apps/web/src/components/chat/SubscriptionSwitch.logic.ts
+new file mode 100644
+index 000000000..af475f0b2
+--- /dev/null
++++ b/apps/web/src/components/chat/SubscriptionSwitch.logic.ts
+@@ -0,0 +1,225 @@
++import type {
++  ProviderInstanceId,
++  ServerProvider,
++  ServerProviderUsageLimits,
++  ServerProviderUsageWindow,
++} from "@t3tools/contracts";
++import { formatResetsIn } from "@t3tools/shared/usageLimits";
++
++import { composerLimitResetPending, composerLimitsFreshness } from "./ComposerStats.logic";
++
++/**
++ * Suggests running the same model on another signed-in subscription: when the
++ * current one is on pace to run out before it resets, or when another one is
++ * about to reset with much of its weekly allowance unused.
++ */
++export interface SubscriptionSwitchSuggestion {
++  readonly kind: "pressure" | "expiring";
++  readonly instanceId: ProviderInstanceId;
++  /** The model's slug on the target subscription. */
++  readonly model: string;
++  readonly providerName: string;
++  readonly modelName: string;
++  readonly reason: string;
++}
++
++/** Used at or above this, a window counts as running out whatever its pace. */
++export const SWITCH_USED_PERCENT = 90;
++/** Projected to reach this by its reset, a window counts as running out. */
++export const SWITCH_PROJECTED_PERCENT = 100;
++/** A pace from the first slice of a window is noise. */
++const MIN_ELAPSED_FRACTION = 0.1;
++/** Another subscription's weekly allowance counts as expiring within this. */
++export const EXPIRING_WITHIN_MS = 24 * 60 * 60_000;
++/** ...when at most this much of it is used. */
++export const EXPIRING_MAX_USED_PERCENT = 60;
++
++export interface WindowPace {
++  readonly window: ServerProviderUsageWindow;
++  readonly usedPercent: number;
++  /** Where usage lands at the reset if it keeps its pace so far; null when too early to tell. */
++  readonly projectedPercent: number | null;
++  readonly resetInMs: number | null;
++}
++
++export function windowPace(window: ServerProviderUsageWindow, nowMs: number): WindowPace {
++  if (composerLimitResetPending(window, nowMs)) {
++    return { window, usedPercent: 0, projectedPercent: null, resetInMs: null };
++  }
++  const resetMs = window.resetsAt === undefined ? NaN : Date.parse(window.resetsAt);
++  const resetInMs = Number.isFinite(resetMs) ? Math.max(0, resetMs - nowMs) : null;
++  const durationMs = (window.windowDurationMins ?? 0) * 60_000;
++  let projectedPercent: number | null = null;
++  if (resetInMs !== null && durationMs > 0) {
++    const elapsedMs = durationMs - resetInMs;
++    if (elapsedMs >= durationMs * MIN_ELAPSED_FRACTION) {
++      projectedPercent = (window.usedPercent * durationMs) / elapsedMs;
++    }
++  }
++  return { window, usedPercent: window.usedPercent, projectedPercent, resetInMs };
++}
++
++export function isRunningOut(pace: WindowPace): boolean {
++  return (
++    pace.usedPercent >= SWITCH_USED_PERCENT ||
++    (pace.projectedPercent !== null && pace.projectedPercent >= SWITCH_PROJECTED_PERCENT)
++  );
++}
++
++const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "_");
++
++/**
++ * The windows that limit this model: every account-wide window plus the
++ * model-scoped weeklies (`seven_day_opus`, `seven_day_fable`) of its family.
++ */
++export function windowsForModel(
++  limits: ServerProviderUsageLimits,
++  model: string,
++): ReadonlyArray<ServerProviderUsageWindow> {
++  const slug = normalize(model);
++  return limits.windows.filter((window) => {
++    const scope = /^seven_day_(.+)$/.exec(window.id)?.[1];
++    return scope === undefined || slug.includes(normalize(scope));
++  });
++}
++
++interface Assessment {
++  readonly paces: ReadonlyArray<WindowPace>;
++  readonly runningOut: WindowPace | undefined;
++  /** The highest projected (or used) percent among its windows. */
++  readonly worstPercent: number;
++}
++
++/** Null when the subscription's limits are unknown or too old to act on. */
++export function assessSubscription(
++  provider: ServerProvider,
++  model: string,
++  nowMs: number,
++): Assessment | null {
++  const limits = provider.usageLimits;
++  if (!limits || limits.unavailable !== undefined) return null;
++  const windows = windowsForModel(limits, model);
++  if (windows.length === 0) return null;
++  const freshness = composerLimitsFreshness(
++    windows.map((window) => window.checkedAt ?? limits.checkedAt),
++    nowMs,
++  );
++  if (freshness.status === "expired") return null;
++  const paces = windows.map((window) => windowPace(window, nowMs));
++  const runningOut = paces
++    .filter(isRunningOut)
++    .toSorted(
++      (a, b) => (b.projectedPercent ?? b.usedPercent) - (a.projectedPercent ?? a.usedPercent),
++    )[0];
++  const worstPercent = Math.max(
++    ...paces.map((pace) => Math.max(pace.usedPercent, pace.projectedPercent ?? 0)),
++  );
++  return { paces, runningOut, worstPercent };
++}
++
++function canRun(provider: ServerProvider): boolean {
++  return (
++    provider.enabled &&
++    provider.availability !== "unavailable" &&
++    (provider.status === "ready" || provider.status === "warning") &&
++    provider.auth.status === "authenticated"
++  );
++}
++
++function modelOn(provider: ServerProvider, model: string) {
++  return provider.models.find(
++    (candidate) => candidate.slug === model || candidate.aliases?.includes(model) === true,
++  );
++}
++
++const providerName = (provider: ServerProvider) =>
++  provider.displayName?.trim() || provider.instanceId;
++
++function describe(pace: WindowPace, nowMs: number): string {
++  const resets = formatResetsIn(pace.window, nowMs);
++  const when = resets ? ` before it ${resets}` : "";
++  return pace.usedPercent >= SWITCH_USED_PERCENT ||
++    pace.projectedPercent === null ||
++    pace.projectedPercent <= pace.usedPercent
++    ? `${pace.window.label} is ${Math.round(pace.usedPercent)}% used`
++    : `${pace.window.label} is on pace for ${Math.round(pace.projectedPercent)}%${when}`;
++}
++
++export function recommendSubscriptionSwitch(input: {
++  readonly instanceId: ProviderInstanceId | null;
++  readonly model: string | null;
++  readonly providers: ReadonlyArray<ServerProvider>;
++  readonly nowMs: number;
++}): SubscriptionSwitchSuggestion | null {
++  const { instanceId, model, providers, nowMs } = input;
++  if (instanceId === null || model === null) return null;
++  const current = providers.find((provider) => provider.instanceId === instanceId);
++  if (!current) return null;
++  const currentAssessment = assessSubscription(current, model, nowMs);
++  if (currentAssessment === null) return null;
++
++  const alternatives = providers.flatMap((provider) => {
++    if (provider.instanceId === instanceId || !canRun(provider)) return [];
++    const target = modelOn(provider, model);
++    const assessment = target ? assessSubscription(provider, target.slug, nowMs) : null;
++    return target && assessment && assessment.runningOut === undefined
++      ? [{ provider, target, assessment }]
++      : [];
++  });
++  const suggest = (
++    kind: SubscriptionSwitchSuggestion["kind"],
++    choice: (typeof alternatives)[number],
++    reason: string,
++  ): SubscriptionSwitchSuggestion => ({
++    kind,
++    instanceId: choice.provider.instanceId,
++    model: choice.target.slug,
++    providerName: providerName(choice.provider),
++    modelName: choice.target.shortName ?? choice.target.name,
++    reason,
++  });
++
++  if (currentAssessment.runningOut) {
++    const best = alternatives.toSorted(
++      (a, b) => a.assessment.worstPercent - b.assessment.worstPercent,
++    )[0];
++    if (!best) return null;
++    return suggest(
++      "pressure",
++      best,
++      `${describe(currentAssessment.runningOut, nowMs)} on ${providerName(current)}. ` +
++        `${providerName(best.provider)} is at most ${Math.round(best.assessment.worstPercent)}% on pace.`,
++    );
++  }
++
++  // Use it or lose it: another subscription's weekly allowance is about to reset largely unused.
++  const currentWeeklyResetMs = Math.min(
++    ...currentAssessment.paces
++      .filter((pace) => pace.window.kind === "weekly" && pace.resetInMs !== null)
++      .map((pace) => pace.resetInMs as number),
++  );
++  const expiring = alternatives.flatMap((choice) => {
++    const weekly = choice.assessment.paces
++      .filter(
++        (pace) =>
++          pace.window.kind === "weekly" &&
++          pace.resetInMs !== null &&
++          pace.resetInMs <= EXPIRING_WITHIN_MS &&
++          pace.resetInMs < currentWeeklyResetMs &&
++          pace.usedPercent <= EXPIRING_MAX_USED_PERCENT,
++      )
++      .toSorted((a, b) => (a.resetInMs as number) - (b.resetInMs as number))[0];
++    return weekly ? [{ choice, weekly }] : [];
++  });
++  const soonest = expiring.toSorted(
++    (a, b) => (a.weekly.resetInMs as number) - (b.weekly.resetInMs as number),
++  )[0];
++  if (!soonest) return null;
++  const resets = formatResetsIn(soonest.weekly.window, nowMs) ?? "resets soon";
++  return suggest(
++    "expiring",
++    soonest.choice,
++    `${Math.round(100 - soonest.weekly.usedPercent)}% of ${providerName(soonest.choice.provider)}'s ` +
++      `${soonest.weekly.window.label.toLowerCase()} allowance is unused and ${resets}. Use it first.`,
++  );
++}

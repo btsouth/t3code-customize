@@ -8,6 +8,7 @@
     "packages/contracts/src/orchestrationV2.test.ts",
     "packages/client-runtime/src/state/orchestrationV2Projection.test.ts",
     "apps/web/src/components/chat/ComposerStats.logic.test.ts",
+    "apps/web/src/components/chat/SubscriptionSwitch.logic.test.ts",
     "packages/provider-core/src/server/usageLimits.test.ts",
     "apps/server/src/provider/claudeUsageLimits.test.ts",
     "apps/server/src/provider/claudeResetCredits.test.ts",

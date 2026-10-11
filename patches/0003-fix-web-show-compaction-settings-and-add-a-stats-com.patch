@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Tyler South <tsouth2@gmail.com>
 Date: Sat, 10 Oct 2026 12:40:14 -0400
-Subject: [PATCH 3/3] fix(web): show compaction settings and add a stats
+Subject: [PATCH 3/4] fix(web): show compaction settings and add a stats
  compact action
 
 ---

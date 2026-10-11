@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Tyler South <tsouth2@gmail.com>
 Date: Thu, 8 Oct 2026 22:05:20 -0400
-Subject: [PATCH 2/3] Usage limits: background polling, reset-aware merging and
+Subject: [PATCH 2/4] Usage limits: background polling, reset-aware merging and
  fetch-time ordering
 
 ---

@@ -82,6 +82,11 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/williamwue/t3code-custom
 `~/Applications` 或 Linux 应用启动器打开 **T3 Code (Customized)**，
 然后启用 **Settings > General > Stats for nerds**。
 
+定制版启动后会直接进入正常的 T3 Code 主页面，不会自动弹出单独的配置向导。
+请手动打开 Settings；如果找不到开关，可以在设置中搜索 **Stats for nerds**。
+该开关默认关闭。启用后，统计信息会显示在聊天输入框下方；具体可显示哪些数据，
+取决于模型服务商和会话情况。
+
 命令包装脚本位于 Linux/macOS 的 `~/.local/bin`，或 Windows 的
 `%LOCALAPPDATA%\t3code-customize\bin`。如果该目录不在 PATH 中，
 可以将其加入 PATH，或在仓库目录中使用 `python t3code-customize <command>`

@@ -84,6 +84,12 @@ After the build succeeds, **quit T3 Code fully**. Open **T3 Code (Customized)**
 from the Windows Start menu, macOS `~/Applications`, or Linux app launcher.
 Enable **Settings > General > Stats for nerds**.
 
+The customized app opens the normal T3 Code main screen; it does not show a
+separate setup wizard. Open Settings manually and search for **Stats for nerds**
+if you cannot find the switch. It is off by default. Once enabled, the stats
+appear below the chat composer; which values are available depends on the
+provider and the conversation.
+
 The command wrapper lives in `~/.local/bin` on Linux/macOS, or
 `%LOCALAPPDATA%\t3code-customize\bin` on Windows. If it is not on PATH, add that
 directory or use `python t3code-customize <command>` from the checkout

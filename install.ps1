@@ -1,6 +1,6 @@
 param(
     [string]$App,
-    [string]$Repository = 'https://github.com/williamwue/t3code-customize.git',
+    [string]$Repository = 'https://github.com/btsouth/t3code-customize.git',
     [string]$Branch = 'main'
 )
 $ErrorActionPreference = 'Stop'

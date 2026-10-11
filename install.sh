@@ -9,7 +9,7 @@ case "$(uname -s)" in
   Linux) repo="${XDG_DATA_HOME:-$HOME/.local/share}/t3code-customize/repo" ;;
   *) echo 'Use install.ps1 on Windows.' >&2; exit 1 ;;
 esac
-remote="${T3_CUSTOMIZE_REPOSITORY:-https://github.com/williamwue/t3code-customize.git}"
+remote="${T3_CUSTOMIZE_REPOSITORY:-https://github.com/btsouth/t3code-customize.git}"
 branch="${T3_CUSTOMIZE_BRANCH:-main}"
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' || {
   echo 'Python 3.10 or newer is required.' >&2; exit 1;

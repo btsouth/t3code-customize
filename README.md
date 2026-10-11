@@ -4,8 +4,7 @@
 
 Your 5 hour and weekly usage, context and tokens per second, right under the T3 Code composer.
 
-Unofficial. Not affiliated with T3 Tools. This fork adds Windows and macOS packaging
-to [btsouth/t3code-customize](https://github.com/btsouth/t3code-customize).
+Unofficial. Not affiliated with T3 Tools.
 It targets an **installed T3 Code Nightly**: Linux AppImage, Windows desktop app,
 or macOS `.app` bundle. The stats patches are shared across platforms.
 
@@ -29,11 +28,11 @@ The first build takes approximately 5–15 minutes, depending on the machine.
 ### Windows (PowerShell)
 
 Install Git for Windows and Python, with `git` and `python.exe` on PATH. Clone
-this fork, then run Python directly; Git Bash and administrator access are not
+this repository, then run Python directly; Git Bash and administrator access are not
 required:
 
 ```powershell
-git clone https://github.com/williamwue/t3code-customize.git
+git clone https://github.com/btsouth/t3code-customize.git
 cd t3code-customize
 python .\t3code-customize build
 ```
@@ -45,7 +44,7 @@ not the NSIS installer:
 python .\t3code-customize build --app 'C:\Apps\T3 Code\T3 Code (Nightly).exe'
 ```
 
-Alternatively, run the checked-out `install.ps1`; it clones this fork into the
+Alternatively, run the checked-out `install.ps1`; it clones this repository into the
 tool's private data directory and builds it. Use `-App` for an explicit executable
 and `-Branch` when testing a feature branch. It does not change execution policy.
 
@@ -56,7 +55,7 @@ Move the official Nightly `.app` out of the DMG into `/Applications` or
 and `ditto` tools are available. Then:
 
 ```sh
-git clone https://github.com/williamwue/t3code-customize.git
+git clone https://github.com/btsouth/t3code-customize.git
 cd t3code-customize
 python3 ./t3code-customize build
 ```
@@ -70,10 +69,10 @@ python3 ./t3code-customize build --app '/path/to/T3 Code (Nightly).app'
 ### Linux
 
 ```sh
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/williamwue/t3code-customize/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/btsouth/t3code-customize/main/install.sh)"
 ```
 
-Or clone this fork and run `python3 ./t3code-customize build`. AppImages in
+Or clone this repository and run `python3 ./t3code-customize build`. AppImages in
 `~/Applications`, `~/Downloads` and the other standard tool search directories
 are discovered automatically. For other paths, pass
 `--app /path/to/T3-Code.AppImage`. The old `--appimage` option still works.
@@ -118,7 +117,7 @@ Your current T3 Code keeps working the whole time.
 
 ## How it works
 
-T3 Code is open source (MIT). This fork keeps the three stats patches and adds
+T3 Code is open source (MIT). This tool keeps the three stats patches and adds
 one patch for portable test expectations. The build script:
 
 1. reads your installed application: its exact upstream commit and the public config T3 Connect needs,

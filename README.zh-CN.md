@@ -4,9 +4,7 @@
 
 在 T3 Code 输入框下方显示 5 小时和每周用量、上下文使用量以及每秒生成的 token 数。
 
-这是非官方项目，与 T3 Tools 无隶属关系。本 fork 基于
-[btsouth/t3code-customize](https://github.com/btsouth/t3code-customize)，增加了
-Windows 和 macOS 应用打包支持。它针对**已经安装的 T3 Code Nightly**：
+这是非官方项目，与 T3 Tools 无隶属关系。它针对**已经安装的 T3 Code Nightly**：
 Linux AppImage、Windows 桌面应用或 macOS `.app` 应用包。三个平台共用同一组统计功能补丁。
 
 ## 功能
@@ -28,10 +26,10 @@ Linux AppImage、Windows 桌面应用或 macOS `.app` 应用包。三个平台�
 ### Windows（PowerShell）
 
 安装 Git for Windows 和 Python，并确保 `git` 和 `python.exe` 位于 PATH 中。
-克隆本 fork 后直接运行 Python，无需 Git Bash 或管理员权限：
+克隆本仓库后直接运行 Python，无需 Git Bash 或管理员权限：
 
 ```powershell
-git clone https://github.com/williamwue/t3code-customize.git
+git clone https://github.com/btsouth/t3code-customize.git
 cd t3code-customize
 python .\t3code-customize build
 ```
@@ -43,7 +41,7 @@ python .\t3code-customize build
 python .\t3code-customize build --app 'C:\Apps\T3 Code\T3 Code (Nightly).exe'
 ```
 
-也可以运行仓库中的 `install.ps1`。它会将本 fork 克隆到工具的私有数据目录，
+也可以运行仓库中的 `install.ps1`。它会将本仓库克隆到工具的私有数据目录，
 然后构建应用。使用 `-App` 指定应用可执行文件，使用 `-Branch` 测试指定分支。
 该脚本不会修改 PowerShell 执行策略。
 
@@ -54,7 +52,7 @@ python .\t3code-customize build --app 'C:\Apps\T3 Code\T3 Code (Nightly).exe'
 工具可用，然后运行：
 
 ```sh
-git clone https://github.com/williamwue/t3code-customize.git
+git clone https://github.com/btsouth/t3code-customize.git
 cd t3code-customize
 python3 ./t3code-customize build
 ```
@@ -68,10 +66,10 @@ python3 ./t3code-customize build --app '/path/to/T3 Code (Nightly).app'
 ### Linux
 
 ```sh
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/williamwue/t3code-customize/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/btsouth/t3code-customize/main/install.sh)"
 ```
 
-也可以克隆本 fork，再运行 `python3 ./t3code-customize build`。
+也可以克隆本仓库，再运行 `python3 ./t3code-customize build`。
 工具会自动发现 `~/Applications`、`~/Downloads` 和其他标准搜索目录中的 AppImage。
 如果文件位于其他位置，传入 `--app /path/to/T3-Code.AppImage`。
 原有的 `--appimage` 参数仍然可用。
@@ -107,14 +105,14 @@ Windows/macOS 定制副本已禁用自动更新；请从原来的官方启动入
 上游更新很快，有时 Nightly 会修改补丁涉及的代码。遇到这种情况：
 
 - 如果已安装 Claude Code 或 Codex，工具会提供让它们就地迁移补丁的选项。
-- 也可以等待仓库更新后，再运行 `t3code-customize`。上游项目通常会在一天左右跟进，但本 fork 的更新时间取决于维护进度。
+- 也可以等待仓库更新后，再运行 `t3code-customize`。项目通常会在一天左右跟进。
 - 或者让编码代理查看本仓库，并按照 [AGENTS.md](AGENTS.md) 迁移补丁。
 
 整个过程中，你当前的官方 T3 Code 仍然可以使用。
 
 ## 工作原理
 
-T3 Code 是采用 MIT 许可证的开源项目。本 fork 保留了三个统计功能补丁，
+T3 Code 是采用 MIT 许可证的开源项目。本工具保留了三个统计功能补丁，
 并增加了一个使测试预期适用于不同平台的补丁。构建脚本会：
 
 1. 读取已安装应用对应的精确上游提交，以及 T3 Connect 所需的公共配置。

@@ -1,5 +1,7 @@
 # t3code-customize
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Your 5 hour and weekly usage, context and tokens per second, right under the T3 Code composer.
 
 Unofficial. Not affiliated with T3 Tools. This fork adds Windows and macOS packaging

@@ -8,21 +8,24 @@ is to carry them onto the user's nightly with every feature still working.
 
 ## Start
 
-1. Run `./t3code-customize build` from this repo. It finds the installed T3 Code (AppImage or macOS app),
-   reads the exact upstream commit it was built from, and applies the patches to
-   that commit in the source checkout at `~/.cache/t3code-customize/t3code`.
+1. Run `python t3code-customize build` from this repo on Windows, or
+   `python3 ./t3code-customize build` on Linux and macOS. It finds the installed
+   application (AppImage, macOS app or Windows executable), reads its exact upstream
+   commit, and applies the patches in the private source checkout. Use `--app` for a
+   nonstandard installed path. The source checkout is `<cache>/t3code`; platform cache
+   locations are in [README.md](README.md#good-to-know), and the build prints its log path.
 2. If it reports a conflict, a rebase is stopped in that checkout. If it reports a
    failing test or typecheck, the commits are in place and the checks failed.
 
 ## Fix
 
-Work only in `~/.cache/t3code-customize/t3code` and this repo.
+Work only in that private source checkout and this repo.
 
-- Conflicts: resolve each file, `git add` it, then `GIT_EDITOR=true git rebase --continue`.
+- Conflicts: resolve each file, `git add` it, then `git -c core.editor=true rebase --continue`.
   Keep upstream's change and port the patch on top of it. When upstream moved or split
   a file, carry the change to the new location and follow the new APIs.
 - Failing checks: fix the relevant commit with `git commit --fixup=<sha>`, then
-  `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash <nightly commit>`. Keep one
+  `git -c sequence.editor=true rebase -i --autosquash <nightly commit>`. Keep one
   commit per patch.
 - If a test file moved upstream, update its path in `checks.json`.
 - `git log <base>..<nightly commit>` and `git show` explain what changed upstream.
@@ -38,9 +41,10 @@ If `t3code-customize` started you, stop once the tests and typechecks in `checks
 pass (run them from the source checkout with `node_modules/.bin/vp test run <files>` and
 `node_modules/.bin/tsc --noEmit -p <package>/tsconfig.json`). It continues the build itself.
 
-Otherwise run `./t3code-customize build --resume`. It reruns the checks on the checkout as you
+Otherwise run the same Python entry with `build --resume`. It reruns the checks on the checkout as you
 left it, builds, installs the result and writes the ported commits back to
 `patches/`. Leave the checkout clean with no rebase in progress.
 
 End with a short report: what changed upstream, what you changed and in which files,
-and whether the final build succeeded.
+and whether the final build succeeded. Separate fixture tests, native process
+checks and real desktop startup evidence.

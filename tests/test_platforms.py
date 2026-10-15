@@ -313,7 +313,7 @@ class OverlayTests(unittest.TestCase):
         copied = windows_app(self.root / 'copied')
         state = {'build': str(copied.path), 'stock': app.fingerprint()}
         disabled = self.root / 'disabled'
-        with patch.object(customize, 'SYSTEM', 'win32'), patch.object(customize, 'installed_app', return_value=app), \
+        with patch.object(customize, 'SYSTEM', 'win32'), patch.object(customize, 'MAC', False), patch.object(customize, 'installed_app', return_value=app), \
                 patch.object(customize, 'load', return_value=state), patch.object(customize, 'DISABLED', disabled):
             self.assertEqual(customize.launch_target(), (copied.executable, None))
             disabled.touch()
@@ -374,7 +374,7 @@ class OverlayTests(unittest.TestCase):
         launcher.touch()
         with patch.object(customize, 'DATA', data), patch.object(customize, 'CACHE', cache), \
                 patch.object(customize, 'CONFIG', config), patch.object(customize, 'BIN', bin_path), \
-                patch.object(customize, 'DESKTOP', launcher), patch.object(customize, 'SYSTEM', 'win32'), \
+                patch.object(customize, 'DESKTOP', launcher), patch.object(customize, 'SYSTEM', 'win32'), patch.object(customize, 'MAC', False), \
                 patch.object(customize, 'say'), support.build_lock(self.root / 'outside.lock'):
             customize.cmd_uninstall(None)
         self.assertFalse(data.exists())
@@ -386,7 +386,7 @@ class OverlayTests(unittest.TestCase):
         copied = windows_app(self.root / 'copied')
         environment = {'ELECTRON_RUN_AS_NODE': '1', 'ELECTRON_NO_ASAR': '1', 'NODE_OPTIONS': '--inspect'}
         from types import SimpleNamespace
-        with patch.object(customize, 'SYSTEM', 'win32'), patch.object(customize, 'installed_app', return_value=app), \
+        with patch.object(customize, 'SYSTEM', 'win32'), patch.object(customize, 'MAC', False), patch.object(customize, 'installed_app', return_value=app), \
                 patch.object(customize, 'launch_target', return_value=(copied.executable, None)), \
                 patch.dict(os.environ, environment), patch.object(customize.subprocess, 'Popen') as spawn:
             customize.cmd_launch(SimpleNamespace(rest=['--', 'argument with spaces']))
